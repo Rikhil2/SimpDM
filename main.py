@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import zero
 from model import SimpDM
-from load_data import make_dataset, prepare_fast_dataloader
+from load_data import make_dataset, prepare_fast_dataloader, Dataset
 from model.modules import MLPDiffusion
 
 import pandas as pd
@@ -11,7 +11,7 @@ from hyperimpute.plugins.utils.metrics import RMSE
 from hyperimpute.utils.metrics import generate_score
 
 class Trainer:
-    def __init__(self, diffusion, train_iter, lr, weight_decay, epochs, device=torch.device('cuda:0'), data=None):
+    def __init__(self, diffusion, train_iter, lr, weight_decay, epochs, device=torch.device('cpu'), data=None):
         self.diffusion = diffusion
         self.train_iter = train_iter
         self.epochs = epochs
@@ -82,11 +82,19 @@ def summarize_results(results, args):
         all_result[key] = rmses
         print('{}: {}'.format(key, final_result[key]))
 
-def main(args, device = torch.device('cuda:0'), seed = 0):
+def main(args, data, device = torch.device('cpu'), seed = 0):
 
     ####################### LOAD DATA #######################
     zero.improve_reproducibility(seed)
-    D = make_dataset(args)
+
+    X_num = {}
+    X_num['x_miss'] = data.to_numpy()
+    X_num['miss_mask'] = (np.isnan(X_num['x_miss'])).astype(int)
+    D = Dataset(X_num, None)
+
+    dataset_mean_np = np.nanmean(D.X_num['x_miss'], 0, keepdims=True)
+    D.X_num['x_miss'] = D.X_num['x_miss'] - dataset_mean_np
+
     num_numerical_features = D.X_num['x_miss'].shape[1]
     d_in = num_numerical_features
     d_out = num_numerical_features
@@ -115,56 +123,41 @@ def main(args, device = torch.device('cuda:0'), seed = 0):
 
     x_imputed = diffusion.impute(X.to(device), mask.to(device))
 
-    ####################### EVALUATE #######################
-    result = {}
+    imputed = pd.DataFrame(x_imputed, columns=data.columns)
+    imputed.to_csv('imputed.csv', header=False, index=False)
 
-    x_test_gt = D.X_num['x_gt']
-    mask = D.X_num['miss_mask']
-
-    rmse = RMSE(x_imputed, x_test_gt, mask)
-    result['rmse'] = rmse
-    print(rmse)
-
-    return result
+    return imputed
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
     # exp param
     parser.add_argument("--n_trial", type=int, default=5)
-    parser.add_argument("--device", type=str, default="cuda:0")
-
+    parser.add_argument("--device", type=str, default="cpu")
     # data param
-    parser.add_argument("--dataset", type=str, default="iris",
-                        choices=["iris", "yacht", "housing", "diabetes", "blood", "energy", "german", "concrete", "yeast",
-                                "airfoil", "wine_red", "abalone", "wine_white", "phoneme", "power", "ecommerce", "california"])
+    parser.add_argument("--dataset", type=str, default="blood")
     parser.add_argument("--scenario", type=str, default="MCAR")
     parser.add_argument("--missing_ratio", type=float, default=0.3)
-
     # training params
     parser.add_argument("--epochs", type=int, default=10000) # 10000
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--batch_size", type=int, default=4096)
-
     # model params
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--hidden_units", type=int, default=256)
     parser.add_argument("--num_timesteps", type=int, default=10)
     parser.add_argument("--ssl_loss_weight", type=float, default=1)
     parser.add_argument("--gammas", type=str, default="1_0.8_0.001")
-
     args = parser.parse_args()
     device = torch.device(args.device)
-
     args.gammas = args.gammas.split('_')
     args.gammas = [float(gamma) for gamma in args.gammas]
-
     timer = zero.Timer()
     timer.run()
 
-    results = []
-    for trial in range(args.n_trial):
-        result = main(seed=trial, device=device, args=args)
-        results.append(result)
-    summarize_results(results, args)
+    df = pd.read_csv('converted.csv')
+    y = df['Quit_FU']
+    X = df.drop(columns=['Quit_FU'])
+    result = main(device=device, args=args, data=X)
+
+    print(pd.concat([result, y], axis=1))

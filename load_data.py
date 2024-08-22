@@ -66,7 +66,9 @@ def get_raw_data(dset_name):
         Y = pd.DataFrame(df_np[:, -1:])
 
     else:
-        assert "error dataset name"
+        df = pd.read_csv('converted.csv')
+        X = df.drop(columns=['Quit_FU'])
+        Y = df['Quit_FU']
 
     return X, Y
 
@@ -75,14 +77,17 @@ def make_dataset(args):
     missing_ratio = args.missing_ratio
     scenario = args.scenario
 
-    X_raw, _ = get_raw_data(name)
+    X_raw, y = get_raw_data(name)
     imputation_scenarios = simulate_scenarios(X_raw, sample_columns=True)
     x_gt, x_miss, miss_mask = imputation_scenarios[scenario][missing_ratio]
     x_gt, x_miss, miss_mask = x_gt.to_numpy(), x_miss.to_numpy(), miss_mask.to_numpy()
+    print(x_miss)#=X_raw
+    miss_mask = (np.isnan(x_miss)).astype(int)
+    print(miss_mask)
+
 
     X_num = {}
     X_num['x_miss'] = x_miss
-    X_num['x_gt'] = x_gt
     X_num['miss_mask'] = miss_mask
 
     D = Dataset(X_num, None)
@@ -90,7 +95,6 @@ def make_dataset(args):
     # zero centered
     dataset_mean_np = np.nanmean(D.X_num['x_miss'], 0, keepdims=True)
     D.X_num['x_miss'] = D.X_num['x_miss'] - dataset_mean_np
-    D.X_num['x_gt'] = D.X_num['x_gt'] - dataset_mean_np
 
     return D
 
